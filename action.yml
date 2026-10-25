@@ -6,7 +6,7 @@ branding:
 
 inputs:
   urls:
-    description: 'Space-separated URLs to audit'
+    description: 'URLs to audit, separated by spaces or newlines'
     required: false
   config:
     description: 'Path to LintPage config file'
@@ -19,41 +19,89 @@ inputs:
     description: 'Minimal output (counts only)'
     required: false
     default: 'false'
+  version:
+    description: 'lintpage CLI version to install (an npm version or dist-tag, e.g. "latest")'
+    required: false
+    default: '0.5.1'
+
+outputs:
+  audited:
+    description: 'Number of URLs audited'
+    value: ${{ steps.run.outputs.audited }}
+  exit-code:
+    description: 'Worst CLI exit code across all URLs: 0 pass, 1 findings, 2 error'
+    value: ${{ steps.run.outputs.exit-code }}
 
 runs:
   using: 'composite'
   steps:
     - name: Install LintPage
       shell: bash
-      run: npm install -g lintpage@latest
-
-    - name: Determine URLs
-      id: urls
-      shell: bash
-      run: |
-        if [ -n "${{ inputs.urls }}" ]; then
-          echo "target=${{ inputs.urls }}" >> $GITHUB_OUTPUT
-        elif [ -n "${{ github.event.deployment_status.target_url }}" ]; then
-          echo "target=${{ github.event.deployment_status.target_url }}" >> $GITHUB_OUTPUT
-        else
-          echo "target=" >> $GITHUB_OUTPUT
-        fi
+      env:
+        LINTPAGE_VERSION: ${{ inputs.version }}
+      run: npm install -g "lintpage@${LINTPAGE_VERSION}"
 
     - name: Run LintPage
+      id: run
       shell: bash
+      # Every value arrives through env, never through ${{ }} in the script:
+      # a deployment URL is set by whoever posts the deployment status.
+      env:
+        INPUT_URLS: ${{ inputs.urls }}
+        DEPLOYMENT_URL: ${{ github.event.deployment_status.target_url }}
+        CONFIG: ${{ inputs.config }}
+        FAIL_ON_WARNING: ${{ inputs.fail-on-warning }}
+        QUIET: ${{ inputs.quiet }}
       run: |
-        ARGS="--format github"
-        if [ "${{ inputs.fail-on-warning }}" = "true" ]; then
-          ARGS="$ARGS --fail-on-warning"
+        # Split on whitespace only: no glob expansion of ? or * in URLs.
+        set -f
+        URLS=($INPUT_URLS)
+        if [ "${#URLS[@]}" -eq 0 ]; then
+          URLS=($DEPLOYMENT_URL)
         fi
-        if [ -n "${{ inputs.config }}" ]; then
-          ARGS="$ARGS --config ${{ inputs.config }}"
+        if [ "${#URLS[@]}" -eq 0 ]; then
+          echo "::error title=LintPage::No URL to audit. Set the 'urls' input, or run on a deployment_status event."
+          echo "audited=0" >> "$GITHUB_OUTPUT"
+          echo "exit-code=2" >> "$GITHUB_OUTPUT"
+          exit 2
         fi
-        if [ "${{ inputs.quiet }}" = "true" ]; then
-          ARGS="$ARGS --quiet"
+
+        ARGS=(--format github)
+        if [ "$FAIL_ON_WARNING" = "true" ]; then
+          ARGS+=(--fail-on-warning)
         fi
-        if [ -n "${{ steps.urls.outputs.target }}" ]; then
-          lintpage ${{ steps.urls.outputs.target }} $ARGS
-        else
-          lintpage $ARGS
+        if [ -n "$CONFIG" ]; then
+          ARGS+=(--config "$CONFIG")
         fi
+        if [ "$QUIET" = "true" ]; then
+          ARGS+=(--quiet)
+        fi
+
+        # The CLI audits one URL per run, so each URL gets its own run. Every
+        # URL is audited even after a failure, and the step exits with the
+        # worst code seen: 1 for findings, 2 for an error.
+        status=0
+        audited=0
+        for url in "${URLS[@]}"; do
+          code=0
+          case "$url" in
+            -*)
+              # Would be read as a CLI flag rather than a URL.
+              echo "::error title=LintPage::Skipped an entry in the URL list that starts with '-'."
+              code=2
+              ;;
+            *)
+              echo "::group::LintPage $url"
+              lintpage "$url" "${ARGS[@]}" || code=$?
+              echo "::endgroup::"
+              audited=$((audited + 1))
+              ;;
+          esac
+          if [ "$code" -gt "$status" ]; then
+            status=$code
+          fi
+        done
+
+        echo "audited=$audited" >> "$GITHUB_OUTPUT"
+        echo "exit-code=$status" >> "$GITHUB_OUTPUT"
+        exit "$status"

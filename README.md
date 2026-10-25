@@ -8,10 +8,20 @@ This GitHub Action runs [LintPage](https://lintpage.com) audits on your pages an
 
 | Input | Description | Required | Default |
 |---|---|---|---|
-| `urls` | Space-separated URLs to audit | No | Auto-detected from deployment event |
+| `urls` | URLs to audit, separated by spaces or newlines. Each URL is audited separately | No | Auto-detected from deployment event |
 | `config` | Path to LintPage config file | No | `.lintpagerc.json` (auto-detected) |
 | `fail-on-warning` | Fail the check on warnings (not just errors) | No | `false` |
 | `quiet` | Minimal output (counts only) | No | `false` |
+| `version` | `lintpage` CLI version to install. Pinned so a CLI release cannot change your results unannounced; set `latest` to always use the newest | No | `0.5.1` |
+
+The `api-key` input from v1.0.0 has been removed. The CLI no longer accepts the `--report` flag it enabled, so setting it made every run fail; it is now ignored with a warning.
+
+## Outputs
+
+| Output | Description |
+|---|---|
+| `audited` | Number of URLs audited |
+| `exit-code` | Worst CLI exit code across all URLs: `0` pass, `1` findings, `2` error |
 
 ## Usage
 
@@ -78,10 +88,10 @@ jobs:
 
 ## How it works
 
-1. Installs the `lintpage` CLI
-2. Detects target URLs from the action input or from `deployment_status` events (works automatically with Vercel, Netlify, etc.)
-3. Runs the audit with `--format github` so issues appear as annotations on your PR
-4. Exits with a non-zero code if critical issues (or warnings with `--fail-on-warning`) are found
+1. Installs the `lintpage` CLI at the version set by `version`
+2. Detects target URLs from the action input or from `deployment_status` events (works automatically with Vercel, Netlify, etc.), and fails with an error if there are none
+3. Audits each URL with `--format github` so issues appear as annotations on your PR. Every URL is audited even if an earlier one fails
+4. Exits with a non-zero code if any URL has critical issues (or warnings with `fail-on-warning`)
 
 ## License
 
