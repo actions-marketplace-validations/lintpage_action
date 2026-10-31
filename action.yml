@@ -1,4 +1,4 @@
-name: 'LintPage'
+name: 'LintPage SEO Check'
 description: 'Audit SEO, accessibility, and performance on preview deployments before they reach production'
 branding:
   icon: 'search'
@@ -12,13 +12,16 @@ inputs:
     description: 'Path to LintPage config file'
     required: false
   fail-on-warning:
-    description: 'Fail the check on warnings (not just errors)'
+    description: 'Fail the check on warnings (not just critical issues)'
     required: false
     default: 'false'
-  quiet:
-    description: 'Minimal output (counts only)'
-    required: false
-    default: 'false'
+  # Commented out until the CLI honours --quiet with --format github, which is
+  # the only format this action uses. Today the flag is accepted and ignored.
+  # Re-enable together with the QUIET env and the --quiet argument below.
+  # quiet:
+  #   description: 'Minimal output (counts only)'
+  #   required: false
+  #   default: 'false'
   version:
     description: 'lintpage CLI version to install (an npm version or dist-tag, e.g. "latest")'
     required: false
@@ -29,7 +32,7 @@ outputs:
     description: 'Number of URLs audited'
     value: ${{ steps.run.outputs.audited }}
   exit-code:
-    description: 'Worst CLI exit code across all URLs: 0 pass, 1 findings, 2 error'
+    description: 'Worst result across all URLs: 0 pass, 1 findings, 2 error'
     value: ${{ steps.run.outputs.exit-code }}
 
 runs:
@@ -39,7 +42,8 @@ runs:
       shell: bash
       env:
         LINTPAGE_VERSION: ${{ inputs.version }}
-      run: npm install -g "lintpage@${LINTPAGE_VERSION}"
+      # No package in the CLI's tree needs an install script, so none runs.
+      run: npm install -g --ignore-scripts "lintpage@${LINTPAGE_VERSION}"
 
     - name: Run LintPage
       id: run
@@ -51,13 +55,19 @@ runs:
         DEPLOYMENT_URL: ${{ github.event.deployment_status.target_url }}
         CONFIG: ${{ inputs.config }}
         FAIL_ON_WARNING: ${{ inputs.fail-on-warning }}
-        QUIET: ${{ inputs.quiet }}
+        # QUIET: ${{ inputs.quiet }}
       run: |
         # Split on whitespace only: no glob expansion of ? or * in URLs.
         set -f
         URLS=($INPUT_URLS)
         if [ "${#URLS[@]}" -eq 0 ]; then
-          URLS=($DEPLOYMENT_URL)
+          # A deployment has one URL, so it is never split into several
+          # entries. Only surrounding whitespace is trimmed.
+          DEPLOYMENT_URL="${DEPLOYMENT_URL#"${DEPLOYMENT_URL%%[![:space:]]*}"}"
+          DEPLOYMENT_URL="${DEPLOYMENT_URL%"${DEPLOYMENT_URL##*[![:space:]]}"}"
+          if [ -n "$DEPLOYMENT_URL" ]; then
+            URLS=("$DEPLOYMENT_URL")
+          fi
         fi
         if [ "${#URLS[@]}" -eq 0 ]; then
           echo "::error title=LintPage::No URL to audit. Set the 'urls' input, or run on a deployment_status event."
@@ -73,9 +83,9 @@ runs:
         if [ -n "$CONFIG" ]; then
           ARGS+=(--config "$CONFIG")
         fi
-        if [ "$QUIET" = "true" ]; then
-          ARGS+=(--quiet)
-        fi
+        # if [ "$QUIET" = "true" ]; then
+        #   ARGS+=(--quiet)
+        # fi
 
         # The CLI audits one URL per run, so each URL gets its own run. Every
         # URL is audited even after a failure, and the step exits with the
@@ -85,6 +95,12 @@ runs:
         for url in "${URLS[@]}"; do
           code=0
           case "$url" in
+            *[[:cntrl:]]*)
+              # A carriage return could end the ::group:: line below early
+              # and start a workflow command of the URL's choosing.
+              echo "::error title=LintPage::Skipped an entry in the URL list that contains control characters."
+              code=2
+              ;;
             -*)
               # Would be read as a CLI flag rather than a URL.
               echo "::error title=LintPage::Skipped an entry in the URL list that starts with '-'."
@@ -97,6 +113,11 @@ runs:
               audited=$((audited + 1))
               ;;
           esac
+          # Anything past 2 (127 for a missing CLI, 137 for a killed one) is
+          # still an error, and the exit-code output promises 0, 1 or 2.
+          if [ "$code" -gt 2 ]; then
+            code=2
+          fi
           if [ "$code" -gt "$status" ]; then
             status=$code
           fi

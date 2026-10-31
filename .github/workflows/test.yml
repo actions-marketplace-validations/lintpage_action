@@ -43,7 +43,7 @@ jobs:
           exit 1
 
   test-flags:
-    name: Test fail-on-warning and quiet flags
+    name: Test the real CLI accepts fail-on-warning
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v5
@@ -55,8 +55,7 @@ jobs:
         with:
           urls: ${{ env.TEST_URL }}
           fail-on-warning: 'true'
-          quiet: 'true'
-      - name: Expect the CLI to accept the flags
+      - name: Expect the CLI to accept the flag
         if: steps.lintpage.outputs.audited != '1' || steps.lintpage.outputs.exit-code == '2'
         env:
           AUDITED: ${{ steps.lintpage.outputs.audited }}
@@ -64,6 +63,57 @@ jobs:
         run: |
           echo "::error::audited=$AUDITED exit-code=$EXIT_CODE"
           exit 1
+
+  test-forwarding:
+    name: Test what the action passes to the CLI
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          persist-credentials: false
+      # A stub ahead of the real CLI on PATH records each call's arguments, one
+      # bracketed argument at a time, so argument boundaries are visible. It
+      # exits 127 for one URL to stand in for a missing or crashed CLI.
+      - name: Put a stub lintpage first on PATH
+        run: |
+          mkdir -p "$RUNNER_TEMP/stub"
+          cat > "$RUNNER_TEMP/stub/lintpage" <<'EOF'
+          #!/usr/bin/env bash
+          printf '[%s]' "$@" >> "$RUNNER_TEMP/argv.log"
+          echo >> "$RUNNER_TEMP/argv.log"
+          case "$1" in
+            *exit127*) exit 127 ;;
+          esac
+          exit 0
+          EOF
+          chmod +x "$RUNNER_TEMP/stub/lintpage"
+          echo "$RUNNER_TEMP/stub" >> "$GITHUB_PATH"
+      # Entries: a plain URL, one that looks like a flag, one with a carriage
+      # return in it, and one the stub fails with 127. Only the first and last
+      # may reach the CLI, and 127 has to be reported as 2.
+      - id: lintpage
+        uses: ./
+        continue-on-error: true
+        with:
+          urls: "https://one.example -h https://cr.example/\rnot-a-url https://two.example/exit127"
+          config: 'seo dir/lintpage config.json'
+          fail-on-warning: 'true'
+      - name: Expect each URL as one argument with every flag, and bad entries skipped
+        env:
+          AUDITED: ${{ steps.lintpage.outputs.audited }}
+          EXIT_CODE: ${{ steps.lintpage.outputs.exit-code }}
+          OUTCOME: ${{ steps.lintpage.outcome }}
+        run: |
+          flags='[--format][github][--fail-on-warning][--config][seo dir/lintpage config.json]'
+          expected="[https://one.example]$flags
+          [https://two.example/exit127]$flags"
+          actual=$(cat "$RUNNER_TEMP/argv.log")
+          if [ "$actual" != "$expected" ] || [ "$AUDITED" != '2' ] ||
+             [ "$EXIT_CODE" != '2' ] || [ "$OUTCOME" != 'failure' ]; then
+            echo "::error::audited=$AUDITED exit-code=$EXIT_CODE outcome=$OUTCOME"
+            printf 'expected:\n%s\nactual:\n%s\n' "$expected" "$actual"
+            exit 1
+          fi
 
   test-multiple-urls:
     name: Test that every URL is audited after a failure
@@ -81,13 +131,16 @@ jobs:
           urls: |
             ${{ env.BAD_URL }}
             ${{ env.TEST_URL }}
-      - name: Expect both URLs audited and the step failed
-        if: steps.lintpage.outputs.audited != '2' || steps.lintpage.outcome != 'failure'
+      - name: Expect both URLs audited and the step failed on findings
+        if: >-
+          steps.lintpage.outputs.audited != '2' || steps.lintpage.outputs.exit-code != '1' ||
+          steps.lintpage.outcome != 'failure'
         env:
           AUDITED: ${{ steps.lintpage.outputs.audited }}
+          EXIT_CODE: ${{ steps.lintpage.outputs.exit-code }}
           OUTCOME: ${{ steps.lintpage.outcome }}
         run: |
-          echo "::error::audited=$AUDITED outcome=$OUTCOME"
+          echo "::error::audited=$AUDITED exit-code=$EXIT_CODE outcome=$OUTCOME"
           exit 1
 
   test-no-url:
