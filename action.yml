@@ -1,4 +1,4 @@
-name: 'LintPage'
+name: 'LintPage SEO Check'
 description: 'Audit SEO, accessibility, and performance on preview deployments before they reach production'
 branding:
   icon: 'search'
@@ -6,54 +6,219 @@ branding:
 
 inputs:
   urls:
-    description: 'Space-separated URLs to audit'
+    description: 'URLs to audit, separated by spaces or newlines'
     required: false
   config:
     description: 'Path to LintPage config file'
     required: false
   fail-on-warning:
-    description: 'Fail the check on warnings (not just errors)'
+    description: 'Fail the check on warnings (not just critical issues)'
     required: false
     default: 'false'
   quiet:
-    description: 'Minimal output (counts only)'
+    description: 'Minimal output: the verdict and notices plus critical annotations (and warnings with fail-on-warning)'
     required: false
     default: 'false'
+  vercel-bypass-secret:
+    description: 'Vercel Protection Bypass for Automation secret, from a GitHub secret. Sent only to the *.vercel.app URLs this action audits'
+    required: false
+  version:
+    description: 'lintpage CLI version to install (an npm version or dist-tag, e.g. "latest")'
+    required: false
+    default: '0.5.3'
+
+outputs:
+  audited:
+    description: 'Number of URLs audited. Skipped entries are not counted'
+    value: ${{ steps.run.outputs.audited }}
+  exit-code:
+    description: 'Worst result across all URLs: 0 pass, 1 findings, 2 error or a skipped entry'
+    value: ${{ steps.run.outputs.exit-code }}
 
 runs:
   using: 'composite'
   steps:
     - name: Install LintPage
       shell: bash
-      run: npm install -g lintpage@latest
-
-    - name: Determine URLs
-      id: urls
-      shell: bash
+      env:
+        LINTPAGE_VERSION: ${{ inputs.version }}
+      # No package in the CLI's tree needs an install script, so none runs.
+      # A CLI older than 0.5.2 audits the Vercel login page of a protected
+      # deployment and passes, and ignores the bypass secret; v1.2.0 relies on
+      # the CLI for both, so an older version gets a warning. The version is
+      # read from the package just installed, not from whatever `lintpage`
+      # comes first on PATH.
       run: |
-        if [ -n "${{ inputs.urls }}" ]; then
-          echo "target=${{ inputs.urls }}" >> $GITHUB_OUTPUT
-        elif [ -n "${{ github.event.deployment_status.target_url }}" ]; then
-          echo "target=${{ github.event.deployment_status.target_url }}" >> $GITHUB_OUTPUT
-        else
-          echo "target=" >> $GITHUB_OUTPUT
+        npm install -g --ignore-scripts "lintpage@${LINTPAGE_VERSION}"
+        installed=$(node -e 'try { console.log(require(require("path").join(process.argv[1], "lintpage", "package.json")).version) } catch {}' "$(npm root -g)" 2>/dev/null | sed -n 's|^\([0-9][0-9.]*\).*|\1|p' | head -n 1) || true
+        if [ -n "$installed" ] && [ "$(printf '%s\n' 0.5.2 "$installed" | sort -V | head -n 1)" != "0.5.2" ]; then
+          echo "::warning title=LintPage::lintpage $installed is older than 0.5.2: a Vercel deployment behind Deployment Protection can pass by auditing the Vercel login page, and vercel-bypass-secret is ignored. Remove the version input or set it to 0.5.2 or later."
         fi
 
     - name: Run LintPage
+      id: run
       shell: bash
+      # Every value arrives through env, never through ${{ }} in the script:
+      # a deployment URL is set by whoever posts the deployment status.
+      env:
+        INPUT_URLS: ${{ inputs.urls }}
+        DEPLOYMENT_URL: ${{ github.event.deployment_status.target_url }}
+        CONFIG: ${{ inputs.config }}
+        FAIL_ON_WARNING: ${{ inputs.fail-on-warning }}
+        QUIET: ${{ inputs.quiet }}
+        VERCEL_BYPASS_SECRET: ${{ inputs.vercel-bypass-secret }}
       run: |
-        ARGS="--format github"
-        if [ "${{ inputs.fail-on-warning }}" = "true" ]; then
-          ARGS="$ARGS --fail-on-warning"
+        # Split on whitespace only: no glob expansion of ? or * in URLs.
+        set -f
+        URLS=($INPUT_URLS)
+        if [ "${#URLS[@]}" -eq 0 ]; then
+          # A deployment has one URL, so it is never split into several
+          # entries. Only surrounding whitespace is trimmed.
+          DEPLOYMENT_URL="${DEPLOYMENT_URL#"${DEPLOYMENT_URL%%[![:space:]]*}"}"
+          DEPLOYMENT_URL="${DEPLOYMENT_URL%"${DEPLOYMENT_URL##*[![:space:]]}"}"
+          if [ -n "$DEPLOYMENT_URL" ]; then
+            URLS=("$DEPLOYMENT_URL")
+          fi
         fi
-        if [ -n "${{ inputs.config }}" ]; then
-          ARGS="$ARGS --config ${{ inputs.config }}"
+        if [ "${#URLS[@]}" -eq 0 ]; then
+          echo "::error title=LintPage::No URL to audit. Set the 'urls' input, or run on a deployment_status event."
+          echo "audited=0" >> "$GITHUB_OUTPUT"
+          echo "exit-code=2" >> "$GITHUB_OUTPUT"
+          exit 2
         fi
-        if [ "${{ inputs.quiet }}" = "true" ]; then
-          ARGS="$ARGS --quiet"
+
+        ARGS=(--format github)
+        if [ "$FAIL_ON_WARNING" = "true" ]; then
+          ARGS+=(--fail-on-warning)
         fi
-        if [ -n "${{ steps.urls.outputs.target }}" ]; then
-          lintpage ${{ steps.urls.outputs.target }} $ARGS
-        else
-          lintpage $ARGS
+        if [ -n "$CONFIG" ]; then
+          ARGS+=(--config "$CONFIG")
         fi
+        if [ "$QUIET" = "true" ]; then
+          ARGS+=(--quiet)
+        fi
+
+        # The bypass secret reaches the CLI through its environment only, never
+        # on its command line. The CLI sends it only to an https *.vercel.app
+        # origin listed in LINTPAGE_BYPASS_ORIGINS, so the action lists the
+        # URLs it audits: they come from this workflow's own inputs or this
+        # repository's deployment_status event. The CLI reduces each to its
+        # origin and ignores anything that does not parse.
+        if [ -n "$VERCEL_BYPASS_SECRET" ]; then
+          export VERCEL_AUTOMATION_BYPASS_SECRET="$VERCEL_BYPASS_SECRET"
+          export LINTPAGE_BYPASS_ORIGINS="${URLS[*]}"
+        fi
+        unset VERCEL_BYPASS_SECRET
+
+        # Superseded in v1.2.0: CLI 0.5.2 reports a redirect to the Vercel
+        # login page itself (CRITICAL redirected-off-site), and with
+        # vercel-bypass-secret the deployment is audited instead. Kept commented
+        # for re-use; it also protected CLI versions before 0.5.2. If restored,
+        # the curl request must send the bypass header too.
+        #
+        # # Lowercased host of a URL, without user info or port.
+        # url_host() {
+        #   local h="${1#*://}"
+        #   h="${h%%[/?#]*}"
+        #   h="${h##*@}"
+        #   h="${h%%:*}"
+        #   printf '%s' "$h" | tr '[:upper:]' '[:lower:]'
+        # }
+        #
+        # # An http(s) URL on a *.vercel.app host: what Vercel posts as a
+        # # deployment's target_url.
+        # is_vercel_app() {
+        #   local lower
+        #   lower=$(printf '%s' "$1" | tr '[:upper:]' '[:lower:]')
+        #   case "$lower" in
+        #     http://*|https://*) ;;
+        #     *) return 1 ;;
+        #   esac
+        #   case "$(url_host "$1")" in
+        #     *.vercel.app) return 0 ;;
+        #   esac
+        #   return 1
+        # }
+        #
+        # # A Vercel deployment behind Deployment Protection answers with a
+        # # redirect to the Vercel login page. The CLI follows it and audits that
+        # # page instead, which passes, so the check would go green without
+        # # looking at the site. Only *.vercel.app hosts are checked, so no extra
+        # # request ever goes to the user's own site, another host or a private
+        # # address. Redirects are not followed: only the first answer's
+        # # Location is read. Prints the error and succeeds when the URL is a
+        # # protected deployment. Other protection (a custom domain, another
+        # # provider) is left to the CLI.
+        # # If the action ever sends a protection bypass header to the CLI, this
+        # # request has to send it too.
+        # protected_deployment() {
+        #   is_vercel_app "$1" || return 1
+        #   [ "$have_curl" = 1 ] || return 1
+        #   local location path
+        #   location=$(curl -q -s -o /dev/null --max-time 15 --proto =http,https \
+        #     -w '%{redirect_url}' -- "$1" 2>/dev/null) || true
+        #   [ "$(url_host "$location")" = "vercel.com" ] || return 1
+        #   path="${location#*://}"
+        #   path="/${path#*/}"
+        #   case "$path" in
+        #     /sso-api*|/login*)
+        #       echo "$1 redirects to the Vercel login page (Deployment Protection), so it cannot be audited. Turn off protection for the deployments you audit, or audit a public URL with the 'urls' input."
+        #       return 0
+        #       ;;
+        #   esac
+        #   return 1
+        # }
+        #
+        # # Without curl a protected deployment cannot be detected, so say so
+        # # once rather than letting the login page pass unremarked.
+        # have_curl=0
+        # if command -v curl >/dev/null 2>&1; then
+        #   have_curl=1
+        # else
+        #   for url in "${URLS[@]}"; do
+        #     if is_vercel_app "$url"; then
+        #       echo "::warning title=LintPage::curl is not installed, so a Vercel deployment behind Deployment Protection cannot be detected. The audit may check the Vercel login page instead of the site."
+        #       break
+        #     fi
+        #   done
+        # fi
+
+        # The CLI audits one URL per run, so each URL gets its own run. Every
+        # URL is audited even after a failure, and the step exits with the
+        # worst code seen: 1 for findings, 2 for an error.
+        status=0
+        audited=0
+        for url in "${URLS[@]}"; do
+          code=0
+          case "$url" in
+            *[[:cntrl:]]*)
+              # A carriage return could end the ::group:: line below early
+              # and start a workflow command of the URL's choosing.
+              echo "::error title=LintPage::Skipped an entry in the URL list that contains control characters."
+              code=2
+              ;;
+            -*)
+              # Would be read as a CLI flag rather than a URL.
+              echo "::error title=LintPage::Skipped an entry in the URL list that starts with '-'."
+              code=2
+              ;;
+            *)
+              echo "::group::LintPage $url"
+              lintpage "$url" "${ARGS[@]}" || code=$?
+              echo "::endgroup::"
+              audited=$((audited + 1))
+              ;;
+          esac
+          # Anything past 2 (127 for a missing CLI, 137 for a killed one) is
+          # still an error, and the exit-code output promises 0, 1 or 2.
+          if [ "$code" -gt 2 ]; then
+            code=2
+          fi
+          if [ "$code" -gt "$status" ]; then
+            status=$code
+          fi
+        done
+
+        echo "audited=$audited" >> "$GITHUB_OUTPUT"
+        echo "exit-code=$status" >> "$GITHUB_OUTPUT"
+        exit "$status"

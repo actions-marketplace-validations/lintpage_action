@@ -1,38 +1,319 @@
 name: Test Action
 on:
+  pull_request:
   workflow_dispatch:
     inputs:
       url:
         description: 'URL to audit'
         default: 'https://lintpage.com'
 
+permissions:
+  contents: read
+
+env:
+  # inputs.url is empty on pull_request runs.
+  TEST_URL: ${{ inputs.url || 'https://lintpage.com' }}
+  # Fails DNS, so the CLI reports it unreachable: a critical finding, exit 1.
+  BAD_URL: 'https://lintpage-action-test.invalid'
+
+# These tests check the action, not the audited site. Each audit step uses
+# continue-on-error, and the assertions read the action's outputs, so findings
+# on TEST_URL cannot turn a run red. Exit code 2 means the CLI errored, which
+# is what a broken flag or argument would produce.
 jobs:
   test-with-url:
     name: Test with explicit URL
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v5
-      - uses: ./
         with:
-          urls: ${{ inputs.url }}
+          persist-credentials: false
+      - id: lintpage
+        uses: ./
+        continue-on-error: true
+        with:
+          urls: ${{ env.TEST_URL }}
+      - name: Expect one URL audited without a CLI error
+        if: steps.lintpage.outputs.audited != '1' || steps.lintpage.outputs.exit-code == '2'
+        env:
+          AUDITED: ${{ steps.lintpage.outputs.audited }}
+          EXIT_CODE: ${{ steps.lintpage.outputs.exit-code }}
+        run: |
+          echo "::error::audited=$AUDITED exit-code=$EXIT_CODE"
+          exit 1
 
-  test-fail-on-warning:
-    name: Test fail-on-warning flag
+  test-flags:
+    name: Test the real CLI accepts fail-on-warning and quiet
     runs-on: ubuntu-latest
-    continue-on-error: true
     steps:
       - uses: actions/checkout@v5
-      - uses: ./
         with:
-          urls: ${{ inputs.url }}
+          persist-credentials: false
+      - id: lintpage
+        uses: ./
+        continue-on-error: true
+        with:
+          urls: ${{ env.TEST_URL }}
           fail-on-warning: 'true'
+          quiet: 'true'
+      - name: Expect the CLI to accept the flags
+        if: steps.lintpage.outputs.audited != '1' || steps.lintpage.outputs.exit-code == '2'
+        env:
+          AUDITED: ${{ steps.lintpage.outputs.audited }}
+          EXIT_CODE: ${{ steps.lintpage.outputs.exit-code }}
+        run: |
+          echo "::error::audited=$AUDITED exit-code=$EXIT_CODE"
+          exit 1
 
-  test-quiet:
-    name: Test quiet flag
+  test-forwarding:
+    name: Test what the action passes to the CLI
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v5
-      - uses: ./
         with:
-          urls: ${{ inputs.url }}
+          persist-credentials: false
+      # A stub ahead of the real CLI on PATH records each call's arguments, one
+      # bracketed argument at a time, so argument boundaries are visible. It
+      # exits 127 for one URL to stand in for a missing or crashed CLI.
+      - name: Put a stub lintpage first on PATH
+        run: |
+          mkdir -p "$RUNNER_TEMP/stub"
+          cat > "$RUNNER_TEMP/stub/lintpage" <<'EOF'
+          #!/usr/bin/env bash
+          printf '[%s]' "$@" >> "$RUNNER_TEMP/argv.log"
+          echo >> "$RUNNER_TEMP/argv.log"
+          case "$1" in
+            *exit127*) exit 127 ;;
+          esac
+          exit 0
+          EOF
+          chmod +x "$RUNNER_TEMP/stub/lintpage"
+          echo "$RUNNER_TEMP/stub" >> "$GITHUB_PATH"
+      # Entries: a plain URL, one that looks like a flag, one with a carriage
+      # return in it, and one the stub fails with 127. Only the first and last
+      # may reach the CLI, and 127 has to be reported as 2.
+      - id: lintpage
+        uses: ./
+        continue-on-error: true
+        with:
+          urls: "https://one.example -h https://cr.example/\rnot-a-url https://two.example/exit127"
+          config: 'seo dir/lintpage config.json'
+          fail-on-warning: 'true'
           quiet: 'true'
+      - name: Expect each URL as one argument with every flag, and bad entries skipped
+        env:
+          AUDITED: ${{ steps.lintpage.outputs.audited }}
+          EXIT_CODE: ${{ steps.lintpage.outputs.exit-code }}
+          OUTCOME: ${{ steps.lintpage.outcome }}
+        run: |
+          flags='[--format][github][--fail-on-warning][--config][seo dir/lintpage config.json][--quiet]'
+          expected="[https://one.example]$flags
+          [https://two.example/exit127]$flags"
+          actual=$(cat "$RUNNER_TEMP/argv.log")
+          if [ "$actual" != "$expected" ] || [ "$AUDITED" != '2' ] ||
+             [ "$EXIT_CODE" != '2' ] || [ "$OUTCOME" != 'failure' ]; then
+            echo "::error::audited=$AUDITED exit-code=$EXIT_CODE outcome=$OUTCOME"
+            printf 'expected:\n%s\nactual:\n%s\n' "$expected" "$actual"
+            exit 1
+          fi
+
+  # Superseded in v1.2.0 with the pre-check it tested: CLI 0.5.2 reports a
+  # redirect to the Vercel login page itself. Kept commented for re-use.
+  #
+  # test-protection:
+  #   name: Test protected Vercel deployments are errors, not audits
+  #   runs-on: ubuntu-latest
+  #   steps:
+  #     - uses: actions/checkout@v5
+  #       with:
+  #         persist-credentials: false
+  #     # A local server imitates a Vercel deployment behind Deployment
+  #     # Protection, under a made-up *.vercel.app name that /etc/hosts points at
+  #     # it. Nothing here reaches the network: the action does not follow the
+  #     # redirect to vercel.com.
+  #     - name: Start a local server
+  #       run: |
+  #         echo '127.0.0.1 lp-test.vercel.app' | sudo tee -a /etc/hosts > /dev/null
+  #         cat > "$RUNNER_TEMP/server.py" <<'EOF'
+  #         from http.server import BaseHTTPRequestHandler, HTTPServer
+  #         class H(BaseHTTPRequestHandler):
+  #             def do_GET(self):
+  #                 p = self.path
+  #                 if p.startswith('/protected'):
+  #                     self.send_response(302)
+  #                     self.send_header('Location', 'https://vercel.com/sso-api?url=x')
+  #                 elif p.startswith('/login'):
+  #                     self.send_response(302)
+  #                     self.send_header('Location', 'https://vercel.com/login?next=x')
+  #                 elif p.startswith('/deploy-button'):
+  #                     self.send_response(302)
+  #                     self.send_header('Location', 'https://vercel.com/new/clone?x')
+  #                 elif p.startswith('/password'):
+  #                     self.send_response(401)
+  #                 else:
+  #                     self.send_response(200)
+  #                 self.end_headers()
+  #             def log_message(self, *args):
+  #                 pass
+  #         HTTPServer(('127.0.0.1', 8787), H).serve_forever()
+  #         EOF
+  #         python3 "$RUNNER_TEMP/server.py" > /dev/null 2>&1 &
+  #         for i in $(seq 1 20); do
+  #           curl -s -o /dev/null http://lp-test.vercel.app:8787/ok && exit 0
+  #           sleep 0.5
+  #         done
+  #         echo "::error::local server did not start"
+  #         exit 1
+  #     - name: Put a stub lintpage first on PATH
+  #       run: |
+  #         mkdir -p "$RUNNER_TEMP/stub"
+  #         cat > "$RUNNER_TEMP/stub/lintpage" <<'EOF'
+  #         #!/usr/bin/env bash
+  #         echo "$1" >> "$RUNNER_TEMP/audited.log"
+  #         exit 0
+  #         EOF
+  #         chmod +x "$RUNNER_TEMP/stub/lintpage"
+  #         echo "$RUNNER_TEMP/stub" >> "$GITHUB_PATH"
+  #     # Refused: the login redirect, a redirect straight to /login, and the
+  #     # first again with an uppercase scheme and host. Audited: a 401 (the CLI
+  #     # reports it), a redirect to vercel.com that is not a login, a plain
+  #     # page, and the login redirect on a host that is not *.vercel.app, which
+  #     # the action does not probe.
+  #     - id: lintpage
+  #       uses: ./
+  #       continue-on-error: true
+  #       with:
+  #         urls: |
+  #           http://lp-test.vercel.app:8787/protected
+  #           http://lp-test.vercel.app:8787/login
+  #           HTTP://LP-TEST.VERCEL.APP:8787/protected
+  #           http://lp-test.vercel.app:8787/password
+  #           http://lp-test.vercel.app:8787/deploy-button
+  #           http://lp-test.vercel.app:8787/ok
+  #           http://127.0.0.1:8787/protected
+  #     - name: Expect only the unprotected URLs audited and the step failed
+  #       env:
+  #         AUDITED: ${{ steps.lintpage.outputs.audited }}
+  #         EXIT_CODE: ${{ steps.lintpage.outputs.exit-code }}
+  #         OUTCOME: ${{ steps.lintpage.outcome }}
+  #       run: |
+  #         expected='http://lp-test.vercel.app:8787/password
+  #         http://lp-test.vercel.app:8787/deploy-button
+  #         http://lp-test.vercel.app:8787/ok
+  #         http://127.0.0.1:8787/protected'
+  #         actual=$(cat "$RUNNER_TEMP/audited.log")
+  #         if [ "$actual" != "$expected" ] || [ "$AUDITED" != '4' ] ||
+  #            [ "$EXIT_CODE" != '2' ] || [ "$OUTCOME" != 'failure' ]; then
+  #           echo "::error::audited=$AUDITED exit-code=$EXIT_CODE outcome=$OUTCOME"
+  #           printf 'expected:\n%s\nactual:\n%s\n' "$expected" "$actual"
+  #           exit 1
+  #         fi
+
+  test-bypass:
+    name: Test the bypass secret and origins reach the CLI
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          persist-credentials: false
+      # A stub CLI records whether the secret arrived intact, whether it
+      # appeared in its arguments, and which origins were listed. It records
+      # only "match", "mismatch", "unset", "clean" or "leaked". The test value
+      # itself is fake and passed as a plain string, so GitHub does show it in
+      # the step's input list; a real secret from `secrets` is masked there.
+      - name: Put a stub lintpage first on PATH
+        run: |
+          mkdir -p "$RUNNER_TEMP/stub"
+          cat > "$RUNNER_TEMP/stub/lintpage" <<'EOF'
+          #!/usr/bin/env bash
+          if [ -z "${VERCEL_AUTOMATION_BYPASS_SECRET+x}" ]; then s=unset
+          elif [ "$VERCEL_AUTOMATION_BYPASS_SECRET" = "$EXPECTED_SECRET" ]; then s=match
+          else s=mismatch; fi
+          case " $* " in *"$EXPECTED_SECRET"*) a=leaked ;; *) a=clean ;; esac
+          [ -z "$EXPECTED_SECRET" ] && a=clean
+          echo "$1 secret=$s argv=$a origins=${LINTPAGE_BYPASS_ORIGINS-unset}" >> "$RUNNER_TEMP/bypass.log"
+          EOF
+          chmod +x "$RUNNER_TEMP/stub/lintpage"
+          echo "$RUNNER_TEMP/stub" >> "$GITHUB_PATH"
+      - id: with-secret
+        uses: ./
+        env:
+          EXPECTED_SECRET: test-only-not-a-real-secret
+        with:
+          urls: https://my-app-abc123-team.vercel.app https://example.com/x
+          vercel-bypass-secret: test-only-not-a-real-secret
+      # The action exports the secret inside its own step only.
+      - name: Expect the secret not to reach a later step
+        run: |
+          if [ -n "${VERCEL_AUTOMATION_BYPASS_SECRET+x}" ] || [ -n "${LINTPAGE_BYPASS_ORIGINS+x}" ]; then
+            echo "::error::the bypass variables leaked into a later step"
+            exit 1
+          fi
+      - id: without-secret
+        uses: ./
+        with:
+          urls: https://my-app-abc123-team.vercel.app
+      - name: Expect the secret and the audited URLs as origins, only when set
+        run: |
+          expected='https://my-app-abc123-team.vercel.app secret=match argv=clean origins=https://my-app-abc123-team.vercel.app https://example.com/x
+          https://example.com/x secret=match argv=clean origins=https://my-app-abc123-team.vercel.app https://example.com/x
+          https://my-app-abc123-team.vercel.app secret=unset argv=clean origins=unset'
+          actual=$(cat "$RUNNER_TEMP/bypass.log")
+          if [ "$actual" != "$expected" ]; then
+            printf 'expected:\n%s\nactual:\n%s\n' "$expected" "$actual"
+            exit 1
+          fi
+
+  test-multiple-urls:
+    name: Test that every URL is audited after a failure
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          persist-credentials: false
+      # The failing URL comes first, so this only passes if the loop keeps
+      # going after a failure. Newline-separated on purpose.
+      - id: lintpage
+        uses: ./
+        continue-on-error: true
+        with:
+          urls: |
+            ${{ env.BAD_URL }}
+            ${{ env.TEST_URL }}
+      - name: Expect both URLs audited and the step failed on findings
+        if: >-
+          steps.lintpage.outputs.audited != '2' || steps.lintpage.outputs.exit-code != '1' ||
+          steps.lintpage.outcome != 'failure'
+        env:
+          AUDITED: ${{ steps.lintpage.outputs.audited }}
+          EXIT_CODE: ${{ steps.lintpage.outputs.exit-code }}
+          OUTCOME: ${{ steps.lintpage.outcome }}
+        run: |
+          echo "::error::audited=$AUDITED exit-code=$EXIT_CODE outcome=$OUTCOME"
+          exit 1
+
+  test-no-url:
+    name: Test missing or blank URL fails clearly
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          persist-credentials: false
+      - id: missing
+        uses: ./
+        continue-on-error: true
+      - id: blank
+        uses: ./
+        continue-on-error: true
+        with:
+          urls: '   '
+      - name: Expect both to fail without auditing anything
+        if: >-
+          steps.missing.outcome != 'failure' || steps.missing.outputs.audited != '0' ||
+          steps.blank.outcome != 'failure' || steps.blank.outputs.audited != '0'
+        env:
+          MISSING: ${{ steps.missing.outcome }}/${{ steps.missing.outputs.audited }}
+          BLANK: ${{ steps.blank.outcome }}/${{ steps.blank.outputs.audited }}
+        run: |
+          echo "::error::missing=$MISSING blank=$BLANK"
+          exit 1
