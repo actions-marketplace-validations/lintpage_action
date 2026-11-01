@@ -43,7 +43,15 @@ runs:
       env:
         LINTPAGE_VERSION: ${{ inputs.version }}
       # No package in the CLI's tree needs an install script, so none runs.
-      run: npm install -g --ignore-scripts "lintpage@${LINTPAGE_VERSION}"
+      # A CLI older than 0.5.2 audits the Vercel login page of a protected
+      # deployment and passes, and ignores the bypass secret; v1.2.0 relies on
+      # the CLI for both, so an older version gets a warning.
+      run: |
+        npm install -g --ignore-scripts "lintpage@${LINTPAGE_VERSION}"
+        installed=$(lintpage --version 2>/dev/null | sed -n 's|^lintpage/\([0-9][0-9.]*\).*|\1|p' | head -n 1)
+        if [ -n "$installed" ] && [ "$(printf '%s\n' 0.5.2 "$installed" | sort -V | head -n 1)" != "0.5.2" ]; then
+          echo "::warning title=LintPage::lintpage $installed is older than 0.5.2: a Vercel deployment behind Deployment Protection can pass by auditing the Vercel login page, and vercel-bypass-secret is ignored. Remove the version input or set it to 0.5.2 or later."
+        fi
 
     - name: Run LintPage
       id: run

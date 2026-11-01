@@ -82,7 +82,9 @@ If your project uses Deployment Protection, the deployment URLs Vercel reports r
           vercel-bypass-secret: ${{ secrets.VERCEL_AUTOMATION_BYPASS_SECRET }}
 ```
 
-The secret reaches the CLI through its environment, never on a command line, and is never printed. It is sent as the `x-vercel-protection-bypass` header only to the https `*.vercel.app` URLs this action audits (from `urls` or the deployment event), and only to that exact origin: not to other sites the audit contacts, and not along a redirect to another host.
+The secret reaches the CLI through its environment, never on a command line, and neither the action nor the CLI prints it. Pass it from `secrets`, as above: GitHub masks secrets in logs, but a plain string or a `vars` value given as an input is shown in the step's log before the step runs. It is sent as the `x-vercel-protection-bypass` header only to the https `*.vercel.app` URLs this action audits (from `urls` or the deployment event), and only to that exact origin: not to other sites the audit contacts, and not along a redirect to another host. With the secret set, list only your own project's deployments in `urls`, since every audited `*.vercel.app` URL receives it.
+
+Use the `vercel-bypass-secret` input rather than setting `VERCEL_AUTOMATION_BYPASS_SECRET` in the step's `env`: the CLI also needs the list of URLs it may send the secret to, which only the input sets up, so the environment variable alone sends nothing.
 
 Vercel also sends `X-Robots-Tag: noindex` on its deployment URLs, so the CLI reports that noindex as info on a `*.vercel.app` URL, and says so. Audit your production domain to check its indexing. Previews may also get a `canonical-self-referencing` warning when their canonical tag points at the production domain, which matters if you set `fail-on-warning`.
 
@@ -132,7 +134,7 @@ Against `localhost`, LintPage skips the checks that only make sense for a public
     urls: 'https://staging.myapp.com'
     config: './seo/lintpage.config.json'
     fail-on-warning: 'true'
-    version: '0.5.1'
+    version: '0.5.2'
 ```
 
 ## How it works

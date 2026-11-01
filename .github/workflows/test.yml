@@ -216,9 +216,11 @@ jobs:
       - uses: actions/checkout@v5
         with:
           persist-credentials: false
-      # A stub CLI records whether the secret arrived intact and which origins
-      # were listed. It compares the secret itself and records only "match",
-      # "mismatch" or "unset", so the value never reaches the log.
+      # A stub CLI records whether the secret arrived intact, whether it
+      # appeared in its arguments, and which origins were listed. It records
+      # only "match", "mismatch", "unset", "clean" or "leaked". The test value
+      # itself is fake and passed as a plain string, so GitHub does show it in
+      # the step's input list; a real secret from `secrets` is masked there.
       - name: Put a stub lintpage first on PATH
         run: |
           mkdir -p "$RUNNER_TEMP/stub"
@@ -227,7 +229,9 @@ jobs:
           if [ -z "${VERCEL_AUTOMATION_BYPASS_SECRET+x}" ]; then s=unset
           elif [ "$VERCEL_AUTOMATION_BYPASS_SECRET" = "$EXPECTED_SECRET" ]; then s=match
           else s=mismatch; fi
-          echo "$1 secret=$s origins=${LINTPAGE_BYPASS_ORIGINS-unset}" >> "$RUNNER_TEMP/bypass.log"
+          case " $* " in *"$EXPECTED_SECRET"*) a=leaked ;; *) a=clean ;; esac
+          [ -z "$EXPECTED_SECRET" ] && a=clean
+          echo "$1 secret=$s argv=$a origins=${LINTPAGE_BYPASS_ORIGINS-unset}" >> "$RUNNER_TEMP/bypass.log"
           EOF
           chmod +x "$RUNNER_TEMP/stub/lintpage"
           echo "$RUNNER_TEMP/stub" >> "$GITHUB_PATH"
@@ -238,15 +242,22 @@ jobs:
         with:
           urls: https://my-app-abc123-team.vercel.app https://example.com/x
           vercel-bypass-secret: test-only-not-a-real-secret
+      # The action exports the secret inside its own step only.
+      - name: Expect the secret not to reach a later step
+        run: |
+          if [ -n "${VERCEL_AUTOMATION_BYPASS_SECRET+x}" ] || [ -n "${LINTPAGE_BYPASS_ORIGINS+x}" ]; then
+            echo "::error::the bypass variables leaked into a later step"
+            exit 1
+          fi
       - id: without-secret
         uses: ./
         with:
           urls: https://my-app-abc123-team.vercel.app
       - name: Expect the secret and the audited URLs as origins, only when set
         run: |
-          expected='https://my-app-abc123-team.vercel.app secret=match origins=https://my-app-abc123-team.vercel.app https://example.com/x
-          https://example.com/x secret=match origins=https://my-app-abc123-team.vercel.app https://example.com/x
-          https://my-app-abc123-team.vercel.app secret=unset origins=unset'
+          expected='https://my-app-abc123-team.vercel.app secret=match argv=clean origins=https://my-app-abc123-team.vercel.app https://example.com/x
+          https://example.com/x secret=match argv=clean origins=https://my-app-abc123-team.vercel.app https://example.com/x
+          https://my-app-abc123-team.vercel.app secret=unset argv=clean origins=unset'
           actual=$(cat "$RUNNER_TEMP/bypass.log")
           if [ "$actual" != "$expected" ]; then
             printf 'expected:\n%s\nactual:\n%s\n' "$expected" "$actual"
