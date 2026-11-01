@@ -13,7 +13,7 @@ This GitHub Action runs [LintPage](https://lintpage.com) audits on your pages an
 | `fail-on-warning` | Fail the check on warnings (not just critical issues) | No | `false` |
 | `quiet` | Minimal output: the verdict and notices plus critical annotations (and warnings with `fail-on-warning`) | No | `false` |
 | `vercel-bypass-secret` | Vercel Protection Bypass for Automation secret, passed from a GitHub secret. Sent only to the `*.vercel.app` URLs this action audits. See below | No | |
-| `version` | `lintpage` CLI version to install: an npm version or dist-tag. Pinned so a CLI release cannot change your results unannounced; set `latest` to always use the newest | No | `0.5.2` |
+| `version` | `lintpage` CLI version to install: an npm version or dist-tag. Pinned so a CLI release cannot change your results unannounced; set `latest` to always use the newest | No | `0.5.3` |
 
 The config file is read from the checked-out repository, so run `actions/checkout` before this action. A missing or invalid config file falls back to the default rules without an error.
 
@@ -27,6 +27,12 @@ The config file is read from the checked-out repository, so run `actions/checkou
 ## Upgrading
 
 `@v1` points at the latest v1 release.
+
+### v1.2.1
+
+- The CLI is pinned to `0.5.3`. Two rules report less, so with `fail-on-warning` a page that failed only on them can now pass. To keep the 0.5.2 results, set `version: '0.5.2'`.
+- `tracking`: a page with no analytics visible in its HTML gets an info finding instead of a warning, since analytics loaded from a JavaScript bundle cannot be seen. An analytics host in a `preconnect`, `dns-prefetch`, `preload` or `modulepreload` link, or in a Content-Security-Policy header or meta tag, now counts as found. To keep the warning, set `"tracking": { "enabled": true, "severity": "WARNING" }` under `rules` in your config file.
+- `meta-render-blocking` no longer counts a `<script nomodule>`, such as the Next.js polyfills, as blocking.
 
 ### v1.2.0
 
@@ -134,7 +140,7 @@ Against `localhost`, LintPage skips the checks that only make sense for a public
     urls: 'https://staging.myapp.com'
     config: './seo/lintpage.config.json'
     fail-on-warning: 'true'
-    version: '0.5.2'
+    version: '0.5.3'
 ```
 
 ## How it works
