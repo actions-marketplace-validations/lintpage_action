@@ -30,9 +30,9 @@ The config file is read from the checked-out repository, so run `actions/checkou
 
 ### v1.2.2
 
-- The CLI is pinned to `0.5.4`. Two rules report less, so with `fail-on-warning` a page that failed only on them can now pass. To keep the 0.5.3 results, set `version: '0.5.3'`.
-- `meta-render-blocking` counts only scripts a browser runs as classic JavaScript. Scripts held back by a consent manager (`type="text/plain"`) or moved to a worker by Partytown (`type="text/partytown"`) are no longer counted as blocking, nor are scripts browsers never run: a `type` with parameters such as `text/javascript; charset=utf-8`, a non-JavaScript `language` attribute, or an empty `src`.
-- `tracking` reads only the Content-Security-Policy directives that let a page load or connect, such as `script-src`, `connect-src` and `default-src`. An analytics host named only in `report-uri`, `frame-ancestors` or `form-action` no longer counts as analytics on the page.
+- The CLI is pinned to `0.5.4`. Two rules change, as below. To keep the 0.5.3 results, set `version: '0.5.3'`.
+- `meta-render-blocking` counts only scripts a browser runs as classic JavaScript. Scripts held back by a consent manager (`type="text/plain"`) or moved to a worker by Partytown (`type="text/partytown"`) are no longer counted as blocking, nor are scripts browsers never run: a `type` with parameters such as `text/javascript; charset=utf-8`, a non-JavaScript `language` attribute, or an empty `src`. With `fail-on-warning`, a page that failed only on this rule can now pass.
+- `tracking` reads only the Content-Security-Policy directives that let a page load or connect, such as `script-src`, `connect-src` and `default-src`. An analytics host named only in `report-uri`, `frame-ancestors` or `form-action` no longer counts, so a page whose only sign of analytics was such a host now gets the info `tracking` finding. If you raised `tracking` to a warning as described under v1.2.1, that page can now fail with `fail-on-warning`; set its severity back to `INFO` to avoid it.
 
 ### v1.2.1
 
