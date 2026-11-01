@@ -30,7 +30,9 @@ The config file is read from the checked-out repository, so run `actions/checkou
 
 ### v1.2.1
 
-- The CLI is pinned to `0.5.3`. A page with no analytics visible in its HTML gets an info `tracking` finding instead of a warning, since analytics loaded from a JavaScript bundle cannot be seen; an analytics host in a resource hint or in the Content-Security-Policy now counts as found. `meta-render-blocking` no longer counts a `<script nomodule>`, such as the Next.js polyfills. With `fail-on-warning`, a page that failed only on one of these can now pass.
+- The CLI is pinned to `0.5.3`. Two rules report less, so with `fail-on-warning` a page that failed only on them can now pass. To keep the 0.5.2 results, set `version: '0.5.2'`.
+- `tracking`: a page with no analytics visible in its HTML gets an info finding instead of a warning, since analytics loaded from a JavaScript bundle cannot be seen. An analytics host in a `preconnect`, `dns-prefetch`, `preload` or `modulepreload` link, or in a Content-Security-Policy header or meta tag, now counts as found. To keep the warning, set `"tracking": { "enabled": true, "severity": "WARNING" }` under `rules` in your config file.
+- `meta-render-blocking` no longer counts a `<script nomodule>`, such as the Next.js polyfills, as blocking.
 
 ### v1.2.0
 
