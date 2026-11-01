@@ -11,7 +11,9 @@ This GitHub Action runs [LintPage](https://lintpage.com) audits on your pages an
 | `urls` | URLs to audit, separated by spaces or newlines. Each URL is audited separately | No | The `deployment_status` target URL |
 | `config` | Path to a LintPage config file | No | `.lintpagerc.json`, `.lintpagerc` or `lintpage.config.json` in the working directory |
 | `fail-on-warning` | Fail the check on warnings (not just critical issues) | No | `false` |
-| `version` | `lintpage` CLI version to install: an npm version or dist-tag. Pinned so a CLI release cannot change your results unannounced; set `latest` to always use the newest | No | `0.5.1` |
+| `quiet` | Minimal output: the verdict and notices plus critical annotations (and warnings with `fail-on-warning`) | No | `false` |
+| `vercel-bypass-secret` | Vercel Protection Bypass for Automation secret, passed from a GitHub secret. Sent only to the `*.vercel.app` URLs this action audits. See below | No | |
+| `version` | `lintpage` CLI version to install: an npm version or dist-tag. Pinned so a CLI release cannot change your results unannounced; set `latest` to always use the newest | No | `0.5.2` |
 
 The config file is read from the checked-out repository, so run `actions/checkout` before this action. A missing or invalid config file falls back to the default rules without an error.
 
@@ -19,12 +21,21 @@ The config file is read from the checked-out repository, so run `actions/checkou
 
 | Output | Description |
 |---|---|
-| `audited` | Number of URLs audited. Skipped entries and protected Vercel deployments are not counted |
-| `exit-code` | Worst result across all URLs: `0` pass, `1` findings, `2` error or a URL that could not be audited |
+| `audited` | Number of URLs audited. Skipped entries are not counted |
+| `exit-code` | Worst result across all URLs: `0` pass, `1` findings, `2` error or a skipped entry |
 
 ## Upgrading
 
 `@v1` points at the latest v1 release.
+
+### v1.2.0
+
+- The CLI is pinned to `0.5.2`. A page that redirects to another host, including a Vercel deployment that redirects to the Vercel login page, is now reported by the CLI as a critical `redirected-off-site` finding (exit code `1`), rather than refused by the action (exit code `2`). Such a URL now counts in `audited`.
+- New `vercel-bypass-secret` input to audit deployments behind Vercel Deployment Protection. See [With Vercel preview deployments](#with-vercel-preview-deployments).
+- On a `*.vercel.app` URL, the `X-Robots-Tag: noindex` Vercel adds to deployment URLs is reported as info, not as a critical issue.
+- The `quiet` input is back and works.
+- Annotations name the page they are about, show `:` and `,` as written, and each audited URL adds a section to the job summary.
+- If you set `version` below `0.5.2`, a protected Vercel deployment can pass again by auditing the Vercel login page; v1.1.1 refused it in the action.
 
 ### v1.1.1
 
@@ -57,7 +68,25 @@ jobs:
 
 This runs for every successful deployment, production included. To audit previews only, also check `github.event.deployment.environment` in the `if:`.
 
-If your project uses Vercel Deployment Protection, the deployment URLs Vercel reports redirect to the Vercel login page, for production deployments as well as previews, so LintPage cannot audit them. For `*.vercel.app` URLs the action detects this and fails with an error rather than auditing the login page. Turn off protection for the deployments you audit, or audit a public URL with the `urls` input.
+#### Deployments behind Vercel Deployment Protection
+
+If your project uses Deployment Protection, the deployment URLs Vercel reports redirect to the Vercel login page, for production deployments as well as previews. Without access, the audit fails with a critical `redirected-off-site` finding that names the cause. To audit the deployments:
+
+1. In Vercel, open the project's **Settings**, then **Deployment Protection**, and create a **Protection Bypass for Automation** secret.
+2. In GitHub, open the repository's **Settings**, then **Secrets and variables**, then **Actions**, and add it as a repository secret named `VERCEL_AUTOMATION_BYPASS_SECRET`.
+3. Pass it to the action:
+
+```yaml
+      - uses: lintpage/action@v1
+        with:
+          vercel-bypass-secret: ${{ secrets.VERCEL_AUTOMATION_BYPASS_SECRET }}
+```
+
+The secret reaches the CLI through its environment, never on a command line, and neither the action nor the CLI prints it. Pass it from `secrets`, as above: GitHub masks secrets in logs, but a plain string or a `vars` value given as an input is shown in the step's log before the step runs. It is sent as the `x-vercel-protection-bypass` header only to the https `*.vercel.app` URLs this action audits (from `urls` or the deployment event), and only to that exact origin: not to other sites the audit contacts, and not along a redirect to another host. With the secret set, list only your own project's deployments in `urls`, since every audited `*.vercel.app` URL receives it.
+
+Use the `vercel-bypass-secret` input rather than setting `VERCEL_AUTOMATION_BYPASS_SECRET` in the step's `env`: the CLI also needs the list of URLs it may send the secret to, which only the input sets up, so the environment variable alone sends nothing.
+
+Vercel also sends `X-Robots-Tag: noindex` on its deployment URLs, so the CLI reports that noindex as info on a `*.vercel.app` URL, and says so. Audit your production domain to check its indexing. Previews may also get a `canonical-self-referencing` warning when their canonical tag points at the production domain, which matters if you set `fail-on-warning`.
 
 ### With explicit URLs
 
@@ -105,18 +134,17 @@ Against `localhost`, LintPage skips the checks that only make sense for a public
     urls: 'https://staging.myapp.com'
     config: './seo/lintpage.config.json'
     fail-on-warning: 'true'
-    version: '0.5.1'
+    version: '0.5.2'
 ```
 
 ## How it works
 
 1. Installs the `lintpage` CLI at the version set by `version`
 2. Takes URLs from the `urls` input or, if it is empty, from the `deployment_status` event's target URL. Fails with an error if there is neither
-3. For a `*.vercel.app` URL, makes one request first, without following redirects. If it redirects to the Vercel login page, the URL is reported as an error instead of being audited, since only the login page would be checked. Other URLs get no extra request
-4. Audits each remaining URL with `--format github`, in its own log group. Every URL is audited even if an earlier one fails
-5. Fails the step if any URL has critical issues (or warnings with `fail-on-warning`), is a protected Vercel deployment, or makes the CLI error. To report without blocking, set `continue-on-error: true` on the step and read the `exit-code` output
+3. Audits each URL with `--format github`, in its own log group. Every URL is audited even if an earlier one fails
+4. Fails the step if any URL has critical issues (or warnings with `fail-on-warning`), or makes the CLI error. A redirect to another host, such as a Vercel login page, is a critical issue. To report without blocking, set `continue-on-error: true` on the step and read the `exit-code` output
 
-Findings appear as annotations in the run summary and on the pull request's Checks tab, not inline on the diff. A finding's annotation does not name its URL; the "LintPage Verdict" notice after each URL does. GitHub shows a limited number of annotations per step, so with many URLs or findings some are left out of the summary. The full output is always in the log.
+Findings appear as annotations in the run summary and on the pull request's Checks tab, not inline on the diff. Each finding's annotation names the page it is about, and each URL's verdict comes first. GitHub shows a limited number of annotations per step, so with many URLs or findings some can be left out; each URL also adds a section to the job summary with its verdict, score, counts and top findings, and the full output is always in the log.
 
 ## License
 
