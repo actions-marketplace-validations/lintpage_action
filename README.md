@@ -49,7 +49,7 @@ jobs:
 
 This runs for every successful deployment, production included. To audit previews only, also check `github.event.deployment.environment` in the `if:`.
 
-If your previews use Vercel Deployment Protection, LintPage cannot get past it, so a protected preview cannot be audited. Turn off protection for previews, or audit a public URL with the `urls` input.
+If your deployments use Vercel Deployment Protection, their URLs redirect to the Vercel login page, so LintPage cannot audit them. The action detects this and fails with an error for that URL rather than auditing the login page. Turn off protection for preview deployments, or audit a public URL with the `urls` input.
 
 ### With explicit URLs
 
@@ -104,8 +104,9 @@ Against `localhost`, LintPage skips the checks that only make sense for a public
 
 1. Installs the `lintpage` CLI at the version set by `version`
 2. Takes URLs from the `urls` input or, if it is empty, from the `deployment_status` event's target URL. Fails with an error if there is neither
-3. Audits each URL with `--format github`, in its own log group. Every URL is audited even if an earlier one fails
-4. Fails the step if any URL has critical issues (or warnings with `fail-on-warning`), or if the CLI errors. To report without blocking, set `continue-on-error: true` on the step and read the `exit-code` output
+3. Checks each URL with one request first. A URL that ends up on the Vercel login page or returns 401 is reported as an error instead of being audited, since only a login page would be checked
+4. Audits each remaining URL with `--format github`, in its own log group. Every URL is audited even if an earlier one fails
+5. Fails the step if any URL has critical issues (or warnings with `fail-on-warning`), cannot be audited, or makes the CLI error. To report without blocking, set `continue-on-error: true` on the step and read the `exit-code` output
 
 Findings appear as annotations in the run summary and on the pull request's Checks tab, not inline on the diff. A finding's annotation does not name its URL; the "LintPage Verdict" notice after each URL does. GitHub shows a limited number of annotations per step, so with many URLs or findings some are left out of the summary. The full output is always in the log.
 

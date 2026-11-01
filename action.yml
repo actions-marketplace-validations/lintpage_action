@@ -87,6 +87,47 @@ runs:
         #   ARGS+=(--quiet)
         # fi
 
+        # Lowercased host of a URL, without user info or port. Only used to
+        # tell whether a request ended up on vercel.com.
+        url_host() {
+          local h="${1#*://}"
+          h="${h%%[/?#]*}"
+          h="${h##*@}"
+          h="${h%%:*}"
+          printf '%s' "$h" | tr '[:upper:]' '[:lower:]'
+        }
+
+        # A deployment behind Vercel Deployment Protection redirects to
+        # Vercel's login page. The CLI follows the redirect and audits that
+        # page instead, which passes, so the check would go green without
+        # looking at the site. One request first catches that, and a 401.
+        # Anything unclear (no answer, a 403 that may be a bot filter, a
+        # same-site redirect) is left to the CLI. Prints the error and
+        # succeeds when the URL cannot be audited.
+        # If the action ever sends a protection bypass header to the CLI, this
+        # request has to send it too.
+        unauditable() {
+          case "$1" in
+            http://*|https://*) ;;
+            *) return 1 ;;
+          esac
+          command -v curl >/dev/null 2>&1 || return 1
+          local result http_code final
+          result=$(curl -sS -L --max-redirs 10 --max-time 20 -o /dev/null \
+            -w '%{http_code} %{url_effective}' -- "$1" 2>/dev/null) || true
+          http_code="${result%% *}"
+          final="${result#* }"
+          if [ "$(url_host "$final")" = "vercel.com" ] && [ "$(url_host "$1")" != "vercel.com" ]; then
+            echo "$1 redirects to the Vercel login page (Deployment Protection), so it cannot be audited. Turn off protection for these deployments, or audit a public URL with the 'urls' input."
+            return 0
+          fi
+          if [ "$http_code" = "401" ]; then
+            echo "$1 returned 401 (authentication required), so it cannot be audited. Audit a publicly reachable URL."
+            return 0
+          fi
+          return 1
+        }
+
         # The CLI audits one URL per run, so each URL gets its own run. Every
         # URL is audited even after a failure, and the step exits with the
         # worst code seen: 1 for findings, 2 for an error.
@@ -107,10 +148,15 @@ runs:
               code=2
               ;;
             *)
-              echo "::group::LintPage $url"
-              lintpage "$url" "${ARGS[@]}" || code=$?
-              echo "::endgroup::"
-              audited=$((audited + 1))
+              if reason=$(unauditable "$url"); then
+                echo "::error title=LintPage::$reason"
+                code=2
+              else
+                echo "::group::LintPage $url"
+                lintpage "$url" "${ARGS[@]}" || code=$?
+                echo "::endgroup::"
+                audited=$((audited + 1))
+              fi
               ;;
           esac
           # Anything past 2 (127 for a missing CLI, 137 for a killed one) is
