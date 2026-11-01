@@ -19,12 +19,20 @@ The config file is read from the checked-out repository, so run `actions/checkou
 
 | Output | Description |
 |---|---|
-| `audited` | Number of URLs audited |
-| `exit-code` | Worst result across all URLs: `0` pass, `1` findings, `2` error |
+| `audited` | Number of URLs audited. Skipped entries and protected Vercel deployments are not counted |
+| `exit-code` | Worst result across all URLs: `0` pass, `1` findings, `2` error or a URL that could not be audited |
 
-## Upgrading from v1.0.0
+## Upgrading
 
-`@v1` now points at v1.1.0. Three changes can affect an existing workflow:
+`@v1` points at the latest v1 release.
+
+### v1.1.1
+
+A `*.vercel.app` deployment behind Vercel Deployment Protection used to pass, because the audit checked the Vercel login page instead of your site. It now fails with an error that names the cause, and is not counted in `audited`. Nothing else changes.
+
+### From v1.0.0 to v1.1.0
+
+Three changes can affect an existing workflow:
 
 - Every URL in `urls` is audited. v1.0.0 audited only the first URL and silently skipped the rest, so a job that passed before can now fail on a URL that was never checked.
 - The CLI is pinned to `0.5.1` instead of `latest`. To use a newer CLI, set `version`, or wait for an action release that raises the default.
@@ -49,7 +57,7 @@ jobs:
 
 This runs for every successful deployment, production included. To audit previews only, also check `github.event.deployment.environment` in the `if:`.
 
-If your previews use Vercel Deployment Protection, LintPage cannot get past it, so a protected preview cannot be audited. Turn off protection for previews, or audit a public URL with the `urls` input.
+If your project uses Vercel Deployment Protection, the deployment URLs Vercel reports redirect to the Vercel login page, for production deployments as well as previews, so LintPage cannot audit them. For `*.vercel.app` URLs the action detects this and fails with an error rather than auditing the login page. Turn off protection for the deployments you audit, or audit a public URL with the `urls` input.
 
 ### With explicit URLs
 
@@ -104,8 +112,9 @@ Against `localhost`, LintPage skips the checks that only make sense for a public
 
 1. Installs the `lintpage` CLI at the version set by `version`
 2. Takes URLs from the `urls` input or, if it is empty, from the `deployment_status` event's target URL. Fails with an error if there is neither
-3. Audits each URL with `--format github`, in its own log group. Every URL is audited even if an earlier one fails
-4. Fails the step if any URL has critical issues (or warnings with `fail-on-warning`), or if the CLI errors. To report without blocking, set `continue-on-error: true` on the step and read the `exit-code` output
+3. For a `*.vercel.app` URL, makes one request first, without following redirects. If it redirects to the Vercel login page, the URL is reported as an error instead of being audited, since only the login page would be checked. Other URLs get no extra request
+4. Audits each remaining URL with `--format github`, in its own log group. Every URL is audited even if an earlier one fails
+5. Fails the step if any URL has critical issues (or warnings with `fail-on-warning`), is a protected Vercel deployment, or makes the CLI error. To report without blocking, set `continue-on-error: true` on the step and read the `exit-code` output
 
 Findings appear as annotations in the run summary and on the pull request's Checks tab, not inline on the diff. A finding's annotation does not name its URL; the "LintPage Verdict" notice after each URL does. GitHub shows a limited number of annotations per step, so with many URLs or findings some are left out of the summary. The full output is always in the log.
 

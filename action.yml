@@ -29,10 +29,10 @@ inputs:
 
 outputs:
   audited:
-    description: 'Number of URLs audited'
+    description: 'Number of URLs audited. Skipped entries and protected Vercel deployments are not counted'
     value: ${{ steps.run.outputs.audited }}
   exit-code:
-    description: 'Worst result across all URLs: 0 pass, 1 findings, 2 error'
+    description: 'Worst result across all URLs: 0 pass, 1 findings, 2 error or a URL that could not be audited'
     value: ${{ steps.run.outputs.exit-code }}
 
 runs:
@@ -87,6 +87,73 @@ runs:
         #   ARGS+=(--quiet)
         # fi
 
+        # Lowercased host of a URL, without user info or port.
+        url_host() {
+          local h="${1#*://}"
+          h="${h%%[/?#]*}"
+          h="${h##*@}"
+          h="${h%%:*}"
+          printf '%s' "$h" | tr '[:upper:]' '[:lower:]'
+        }
+
+        # An http(s) URL on a *.vercel.app host: what Vercel posts as a
+        # deployment's target_url.
+        is_vercel_app() {
+          local lower
+          lower=$(printf '%s' "$1" | tr '[:upper:]' '[:lower:]')
+          case "$lower" in
+            http://*|https://*) ;;
+            *) return 1 ;;
+          esac
+          case "$(url_host "$1")" in
+            *.vercel.app) return 0 ;;
+          esac
+          return 1
+        }
+
+        # A Vercel deployment behind Deployment Protection answers with a
+        # redirect to the Vercel login page. The CLI follows it and audits that
+        # page instead, which passes, so the check would go green without
+        # looking at the site. Only *.vercel.app hosts are checked, so no extra
+        # request ever goes to the user's own site, another host or a private
+        # address. Redirects are not followed: only the first answer's
+        # Location is read. Prints the error and succeeds when the URL is a
+        # protected deployment. Other protection (a custom domain, another
+        # provider) is left to the CLI.
+        # If the action ever sends a protection bypass header to the CLI, this
+        # request has to send it too.
+        protected_deployment() {
+          is_vercel_app "$1" || return 1
+          [ "$have_curl" = 1 ] || return 1
+          local location path
+          location=$(curl -q -s -o /dev/null --max-time 15 --proto =http,https \
+            -w '%{redirect_url}' -- "$1" 2>/dev/null) || true
+          [ "$(url_host "$location")" = "vercel.com" ] || return 1
+          path="${location#*://}"
+          path="/${path#*/}"
+          case "$path" in
+            /sso-api*|/login*)
+              echo "$1 redirects to the Vercel login page (Deployment Protection), so it cannot be audited. Turn off protection for the deployments you audit, or audit a public URL with the 'urls' input."
+              return 0
+              ;;
+          esac
+          return 1
+        }
+
+        # Without curl a protected deployment cannot be detected, so say so
+        # once rather than letting the login page pass unremarked.
+        have_curl=0
+        if command -v curl >/dev/null 2>&1; then
+          have_curl=1
+        else
+          for url in "${URLS[@]}"; do
+            if is_vercel_app "$url"; then
+              echo "::warning title=LintPage::curl is not installed, so a Vercel deployment behind Deployment Protection cannot be detected. The audit may check the Vercel login page instead of the site."
+              break
+            fi
+          done
+        fi
+
         # The CLI audits one URL per run, so each URL gets its own run. Every
         # URL is audited even after a failure, and the step exits with the
         # worst code seen: 1 for findings, 2 for an error.
@@ -107,10 +174,15 @@ runs:
               code=2
               ;;
             *)
-              echo "::group::LintPage $url"
-              lintpage "$url" "${ARGS[@]}" || code=$?
-              echo "::endgroup::"
-              audited=$((audited + 1))
+              if reason=$(protected_deployment "$url"); then
+                echo "::error title=LintPage::$reason"
+                code=2
+              else
+                echo "::group::LintPage $url"
+                lintpage "$url" "${ARGS[@]}" || code=$?
+                echo "::endgroup::"
+                audited=$((audited + 1))
+              fi
               ;;
           esac
           # Anything past 2 (127 for a missing CLI, 137 for a killed one) is
