@@ -13,7 +13,7 @@ This GitHub Action runs [LintPage](https://lintpage.com) audits on your pages an
 | `fail-on-warning` | Fail the check on warnings (not just critical issues) | No | `false` |
 | `quiet` | Minimal output: the verdict and notices plus critical annotations (and warnings with `fail-on-warning`) | No | `false` |
 | `vercel-bypass-secret` | Vercel Protection Bypass for Automation secret, passed from a GitHub secret. Sent only to the `*.vercel.app` URLs this action audits. See below | No | |
-| `version` | `lintpage` CLI version to install: an npm version or dist-tag. Pinned so a CLI release cannot change your results unannounced; set `latest` to always use the newest | No | `0.5.3` |
+| `version` | `lintpage` CLI version to install: an npm version or dist-tag. Pinned so a CLI release cannot change your results unannounced; set `latest` to always use the newest | No | `0.5.4` |
 
 The config file is read from the checked-out repository, so run `actions/checkout` before this action. A missing or invalid config file falls back to the default rules without an error.
 
@@ -27,6 +27,12 @@ The config file is read from the checked-out repository, so run `actions/checkou
 ## Upgrading
 
 `@v1` points at the latest v1 release.
+
+### v1.2.2
+
+- The CLI is pinned to `0.5.4`. Two rules report less, so with `fail-on-warning` a page that failed only on them can now pass. To keep the 0.5.3 results, set `version: '0.5.3'`.
+- `meta-render-blocking` counts only scripts a browser runs as classic JavaScript. Scripts held back by a consent manager (`type="text/plain"`) or moved to a worker by Partytown (`type="text/partytown"`) are no longer counted as blocking, nor are scripts browsers never run: a `type` with parameters such as `text/javascript; charset=utf-8`, a non-JavaScript `language` attribute, or an empty `src`.
+- `tracking` reads only the Content-Security-Policy directives that let a page load or connect, such as `script-src`, `connect-src` and `default-src`. An analytics host named only in `report-uri`, `frame-ancestors` or `form-action` no longer counts as analytics on the page.
 
 ### v1.2.1
 
@@ -140,7 +146,7 @@ Against `localhost`, LintPage skips the checks that only make sense for a public
     urls: 'https://staging.myapp.com'
     config: './seo/lintpage.config.json'
     fail-on-warning: 'true'
-    version: '0.5.3'
+    version: '0.5.4'
 ```
 
 ## How it works
