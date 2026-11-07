@@ -31,7 +31,7 @@ The config file is read from the checked-out repository, so run `actions/checkou
 ### v1.2.3
 
 - The CLI is pinned to `0.5.5`. To keep the 0.5.4 results, set `version: '0.5.4'`.
-- `cors-policy` reports `Access-Control-Allow-Origin: *` without credentials as info instead of a warning. Vercel (and Cloudflare Pages on `*.pages.dev`) send it on static pages by default, and without credentials it only lets other sites read what anyone can already fetch. With `fail-on-warning`, a page that failed only on this can now pass. A wildcard with credentials stays critical, and a server that reflects any origin stays a warning. Setting a severity for `cors-policy` in your config is not a way to keep the old warning: it applies to every `cors-policy` finding, so it would also turn the critical cases into warnings.
+- `cors-policy` reports `Access-Control-Allow-Origin: *` without credentials as info instead of a warning. Vercel (and Cloudflare Pages on `*.pages.dev`) send it on static pages by default, and without credentials it only lets other sites read what anyone can already fetch. With `fail-on-warning`, a page that failed only on this can now pass. A wildcard with credentials stays critical, and a server that reflects any origin stays a warning, or critical with credentials. Setting a severity for `cors-policy` in your config is not a way to keep the old warning: it applies to every `cors-policy` finding, so it would also turn the critical cases into warnings. For the same reason, if you lowered or disabled `cors-policy` to quiet the Vercel warning, remove that override now: it also hides the critical cases.
 - The CLI package now carries the license notices for the code it bundles (undici and llhttp).
 
 ### v1.2.2
