@@ -13,7 +13,7 @@ This GitHub Action runs [LintPage](https://lintpage.com) audits on your pages an
 | `fail-on-warning` | Fail the check on warnings (not just critical issues) | No | `false` |
 | `quiet` | Minimal output: the verdict and notices plus critical annotations (and warnings with `fail-on-warning`) | No | `false` |
 | `vercel-bypass-secret` | Vercel Protection Bypass for Automation secret, passed from a GitHub secret. Sent only to the `*.vercel.app` URLs this action audits. See below | No | |
-| `version` | `lintpage` CLI version to install: an npm version or dist-tag. Pinned so a CLI release cannot change your results unannounced; set `latest` to always use the newest | No | `0.5.4` |
+| `version` | `lintpage` CLI version to install: an npm version or dist-tag. Pinned so a CLI release cannot change your results unannounced; set `latest` to always use the newest | No | `0.5.5` |
 
 The config file is read from the checked-out repository, so run `actions/checkout` before this action. A missing or invalid config file falls back to the default rules without an error.
 
@@ -27,6 +27,12 @@ The config file is read from the checked-out repository, so run `actions/checkou
 ## Upgrading
 
 `@v1` points at the latest v1 release.
+
+### v1.2.3
+
+- The CLI is pinned to `0.5.5`. To keep the 0.5.4 results, set `version: '0.5.4'`.
+- `cors-policy` reports `Access-Control-Allow-Origin: *` without credentials as info instead of a warning. Vercel (and Cloudflare Pages on `*.pages.dev`) send it on static pages by default, and without credentials it only lets other sites read what anyone can already fetch. With `fail-on-warning`, a page that failed only on this can now pass. A wildcard with credentials stays critical, and a server that reflects any origin stays a warning, or critical with credentials. Setting a severity for `cors-policy` in your config is not a way to keep the old warning: it applies to every `cors-policy` finding, so it would also turn the critical cases into warnings. For the same reason, if you lowered or disabled `cors-policy` to quiet the Vercel warning, remove that override now: it also hides the critical cases.
+- The CLI package now carries the license notices for the code it bundles (undici and llhttp).
 
 ### v1.2.2
 
@@ -146,7 +152,7 @@ Against `localhost`, LintPage skips the checks that only make sense for a public
     urls: 'https://staging.myapp.com'
     config: './seo/lintpage.config.json'
     fail-on-warning: 'true'
-    version: '0.5.4'
+    version: '0.5.5'
 ```
 
 ## How it works
