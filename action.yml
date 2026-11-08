@@ -25,7 +25,7 @@ inputs:
   version:
     description: 'lintpage CLI version to install (an npm version or dist-tag, e.g. "latest")'
     required: false
-    default: '0.5.5'
+    default: '0.5.6'
 
 outputs:
   audited:
