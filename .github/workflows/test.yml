@@ -25,7 +25,7 @@ jobs:
     name: Test with explicit URL
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@v7
         with:
           persist-credentials: false
       - id: lintpage
@@ -57,7 +57,7 @@ jobs:
     name: Test the version input picks the CLI installed
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@v7
         with:
           persist-credentials: false
       - id: lintpage
@@ -82,7 +82,7 @@ jobs:
     name: Test the real CLI accepts fail-on-warning and quiet
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@v7
         with:
           persist-credentials: false
       - id: lintpage
@@ -105,7 +105,7 @@ jobs:
     name: Test what the action passes to the CLI
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@v7
         with:
           persist-credentials: false
       # A stub ahead of the real CLI on PATH records each call's arguments, one
@@ -160,7 +160,7 @@ jobs:
   #   name: Test protected Vercel deployments are errors, not audits
   #   runs-on: ubuntu-latest
   #   steps:
-  #     - uses: actions/checkout@v5
+  #     - uses: actions/checkout@v7
   #       with:
   #         persist-credentials: false
   #     # A local server imitates a Vercel deployment behind Deployment
@@ -249,7 +249,7 @@ jobs:
     name: Test the bypass secret and origins reach the CLI
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@v7
         with:
           persist-credentials: false
       # A stub CLI records whether the secret arrived intact, whether it
@@ -304,7 +304,7 @@ jobs:
     name: Test that every URL is audited after a failure
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@v7
         with:
           persist-credentials: false
       # The failing URL comes first, so this only passes if the loop keeps
@@ -332,7 +332,7 @@ jobs:
     name: Test missing or blank URL fails clearly
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@v7
         with:
           persist-credentials: false
       - id: missing

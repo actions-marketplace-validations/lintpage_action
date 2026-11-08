@@ -13,7 +13,7 @@ This GitHub Action runs [LintPage](https://lintpage.com) audits on your pages an
 | `fail-on-warning` | Fail the check on warnings (not just critical issues) | No | `false` |
 | `quiet` | Minimal output: the verdict and notices plus critical annotations (and warnings with `fail-on-warning`) | No | `false` |
 | `vercel-bypass-secret` | Vercel Protection Bypass for Automation secret, passed from a GitHub secret. Sent only to the `*.vercel.app` URLs this action audits. See below | No | |
-| `version` | `lintpage` CLI version to install: an npm version or dist-tag. Pinned so a CLI release cannot change your results unannounced; set `latest` to always use the newest | No | `0.5.5` |
+| `version` | `lintpage` CLI version to install: an npm version or dist-tag. Pinned so a CLI release cannot change your results unannounced; set `latest` to always use the newest | No | `0.5.6` |
 
 The config file is read from the checked-out repository, so run `actions/checkout` before this action. A missing or invalid config file falls back to the default rules without an error.
 
@@ -27,6 +27,15 @@ The config file is read from the checked-out repository, so run `actions/checkou
 ## Upgrading
 
 `@v1` points at the latest v1 release.
+
+### v1.2.4
+
+- The CLI is pinned to `0.5.6`. Some rules report more and a few report less, so a check that passed can now fail and one that failed can now pass. To keep the 0.5.5 results, set `version: '0.5.5'`.
+- `robots-noindex` reads every robots meta tag, not only the first, and `<meta name="googlebot">` too, with names and directives in any letter case. Directives count only as whole words, separated by commas, spaces or semicolons, and `none` counts as `noindex, nofollow`. A page with `content="NOINDEX"`, a second robots meta carrying `noindex`, or a googlebot `noindex` now gets the critical finding; the nofollow warning follows the same rules. Content that only contains the word, such as `noindex|nofollow`, no longer matches, so a page that failed only on that can now pass.
+- `robots-txt-check` decides about the audited page itself, not only a site-wide `Disallow: /`. A block for Googlebot is critical. A block only in the `User-agent: *` group, while a `Googlebot` group allows the page, is a warning: where 0.5.5 did not report such a block, the warning is new and fails with `fail-on-warning`; where it was a `Disallow: /` in the `*` group, it drops from critical to a warning, so without `fail-on-warning` a page that failed on it can now pass. `Disallow: /blog` on a /blog page now fails, while `Disallow: /` with `Allow: /blog/` no longer reports /blog/post as blocked. When only the query string is blocked, the message says so without showing the query string. Setting a severity for `robots-txt-check` is not a way to keep the old results: it applies to every `robots-txt-check` finding, so lowering it would also stop a whole-site `Disallow: /` from failing.
+- The robots.txt parser behind that check and the AI crawler checks matches the path plus query string as Google documents, reads `Googlebot/2.1` as `Googlebot`, handles CR-only line endings and non-ASCII paths, ignores rules before the first `User-agent` line and past the first 500 KiB, and can no longer be stalled by a hostile robots.txt. This works both ways: a rule it used to miss can now report an AI crawler as blocked, and a rule it used to apply can stop matching, for example `Disallow: /*.php$` on a URL with a query string. A bot that robots.txt now disallows no longer gets the critical `ai/*-silent-block` finding.
+- `anchor-missing-href` counts a `javascript:` href as missing. With `fail-on-warning`, a page with such a link can now fail.
+- Output only, no change to results: the job summary lists every critical and warning finding (up to 50 per page), then info findings while the table has fewer than 10 rows; before, it listed the 10 most severe. With `quiet`, it no longer points at the log for findings `quiet` leaves out of it. Every URL of a run shares one step summary, and if it nears GitHub's 1 MiB limit, a page's section is replaced by a one-line note so GitHub does not drop the whole summary.
 
 ### v1.2.3
 
@@ -80,7 +89,7 @@ jobs:
     if: github.event.deployment_status.state == 'success'
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@v7
       - uses: lintpage/action@v1
 ```
 
@@ -116,7 +125,7 @@ jobs:
   lintpage:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@v7
       - uses: lintpage/action@v1
         with:
           urls: 'https://staging.myapp.com https://staging.myapp.com/pricing'
@@ -132,7 +141,7 @@ jobs:
   lintpage:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@v7
       - run: npm ci
       - run: npm run build
       - run: npm start > server.log 2>&1 &
@@ -152,7 +161,7 @@ Against `localhost`, LintPage skips the checks that only make sense for a public
     urls: 'https://staging.myapp.com'
     config: './seo/lintpage.config.json'
     fail-on-warning: 'true'
-    version: '0.5.5'
+    version: '0.5.6'
 ```
 
 ## How it works
@@ -162,7 +171,7 @@ Against `localhost`, LintPage skips the checks that only make sense for a public
 3. Audits each URL with `--format github`, in its own log group. Every URL is audited even if an earlier one fails
 4. Fails the step if any URL has critical issues (or warnings with `fail-on-warning`), or makes the CLI error. A redirect to another host, such as a Vercel login page, is a critical issue. To report without blocking, set `continue-on-error: true` on the step and read the `exit-code` output
 
-Findings appear as annotations in the run summary and on the pull request's Checks tab, not inline on the diff. Each finding's annotation names the page it is about, and each URL's verdict comes first. GitHub shows a limited number of annotations per step, so with many URLs or findings some can be left out; each URL also adds a section to the job summary with its verdict, score, counts and top findings, and the full output is always in the log.
+Findings appear as annotations in the run summary and on the pull request's Checks tab, not inline on the diff. Each finding's annotation names the page it is about. GitHub shows at most 10 annotations of each severity per step, and every URL runs in this one step, so with many URLs or findings some are left out. Each URL's verdict is a notice that comes before that URL's findings, but it shares the 10 notices with info findings and the other URLs' verdicts, so with several URLs a later verdict can be left out; `quiet` drops the info annotations and leaves those notices to the verdicts. Each URL also adds a section to the job summary with its verdict, score, counts, every critical and warning finding (up to 50) and, while there is room, info findings; `quiet` does not shorten it. The log has every finding unless `quiet` is on, which leaves out the findings that do not fail the check.
 
 ## License
 
