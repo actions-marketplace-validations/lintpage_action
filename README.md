@@ -13,7 +13,7 @@ This GitHub Action runs [LintPage](https://lintpage.com) audits on your pages an
 | `fail-on-warning` | Fail the check on warnings (not just critical issues) | No | `false` |
 | `quiet` | Minimal output: the verdict and notices plus critical annotations (and warnings with `fail-on-warning`) | No | `false` |
 | `vercel-bypass-secret` | Vercel Protection Bypass for Automation secret, passed from a GitHub secret. Sent only to the `*.vercel.app` URLs this action audits. See below | No | |
-| `version` | `lintpage` CLI version to install: an npm version or dist-tag. Pinned so a CLI release cannot change your results unannounced; set `latest` to always use the newest | No | `0.5.6` |
+| `version` | `lintpage` CLI version to install: an npm version or dist-tag. Pinned so a CLI release cannot change your results unannounced; set `latest` to always use the newest | No | `0.5.7` |
 
 The config file is read from the checked-out repository, so run `actions/checkout` before this action. A missing or invalid config file falls back to the default rules without an error.
 
@@ -27,6 +27,14 @@ The config file is read from the checked-out repository, so run `actions/checkou
 ## Upgrading
 
 `@v1` points at the latest v1 release.
+
+### v1.2.5
+
+- The CLI is pinned to `0.5.7`. Most sites get the same results as with 0.5.6. A site that is very slow to send robots.txt, sitemap.xml or a page to the AI crawler probes can get findings it did not get before, or lose some, so a check that passed can now fail and one that failed can now pass. A probed page over 5 MiB or a sitemap over 50 MiB is now read only up to that size. To keep the 0.5.6 behaviour, set `version: '0.5.6'`.
+- robots.txt, sitemap.xml and the AI crawler probes can no longer stall the job or run it out of memory: each now has a time limit, and only so much of each is read. `robots-txt-check` and the AI crawler checks give robots.txt 5 seconds to start answering and 10 seconds to arrive in full. `sitemap-presence` gives sitemap.xml 30 seconds and reads at most 50 MiB. Each AI crawler probe gives the page 15 seconds in all and reads at most 5 MiB; the headers still have to arrive within 5 seconds, as before. The audited page itself, `ttfb-pro` and `cors-policy` fetch as before. None of these rules run against a local build (`localhost`), so a local build sees no change.
+- A robots.txt or sitemap.xml that does not arrive in time is a warning that says so, which fails the check with `fail-on-warning`. It takes the place of that rule's other findings: a slow robots.txt that blocks Googlebot is no longer a critical finding, so without `fail-on-warning` such a page can now pass. The AI checks then treat robots.txt as missing, as they do when the fetch fails: if your server answers GPTBot, ClaudeBot or PerplexityBot with 403, 429 or a 5xx, that bot gets the critical `ai/*-silent-block` finding, which fails the check, and findings that come from the rules of robots.txt, such as `ai/*-user-blocked` for a bot robots.txt disallows or `ai/*-extended-disallowed`, are not reported. A probe that runs out of time is not counted as a block, and the near-empty content check (`ai/empty-content-to-bot`) skips it, as it skips a page cut at 5 MiB.
+- A robots.txt with many `User-agent` lines no longer slows the job down. 0.5.6 took seconds to parse a file with a few hundred `User-agent` lines followed by rules up to the 500 KiB limit, and with thousands of `User-agent` lines tens of seconds and gigabytes of memory, which could crash the CLI; the action reports that as an error. The decisions are the same.
+- The AI crawler checks measure the text of a probed page in linear time, with the same result. Before, a page with many unclosed `<` or `<script` tags took time that grew with the square of its size (64 KiB of `<` took about 5 seconds).
 
 ### v1.2.4
 
@@ -161,7 +169,7 @@ Against `localhost`, LintPage skips the checks that only make sense for a public
     urls: 'https://staging.myapp.com'
     config: './seo/lintpage.config.json'
     fail-on-warning: 'true'
-    version: '0.5.6'
+    version: '0.5.7'
 ```
 
 ## How it works
