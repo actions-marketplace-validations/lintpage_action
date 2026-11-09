@@ -13,7 +13,7 @@ This GitHub Action runs [LintPage](https://lintpage.com) audits on your pages an
 | `fail-on-warning` | Fail the check on warnings (not just critical issues) | No | `false` |
 | `quiet` | Minimal output: the verdict and notices plus critical annotations (and warnings with `fail-on-warning`) | No | `false` |
 | `vercel-bypass-secret` | Vercel Protection Bypass for Automation secret, passed from a GitHub secret. Sent only to the `*.vercel.app` URLs this action audits. See below | No | |
-| `version` | `lintpage` CLI version to install: an npm version or dist-tag. Pinned so a CLI release cannot change your results unannounced; set `latest` to always use the newest | No | `0.5.6` |
+| `version` | `lintpage` CLI version to install: an npm version or dist-tag. Pinned so a CLI release cannot change your results unannounced; set `latest` to always use the newest | No | `0.5.7` |
 
 The config file is read from the checked-out repository, so run `actions/checkout` before this action. A missing or invalid config file falls back to the default rules without an error.
 
@@ -27,6 +27,16 @@ The config file is read from the checked-out repository, so run `actions/checkou
 ## Upgrading
 
 `@v1` points at the latest v1 release.
+
+### v1.2.5
+
+- The CLI is pinned to `0.5.7`. robots.txt, sitemap.xml and the AI crawler probes now have time limits, described below. A site that misses one can get findings it did not get before, or lose some, so a check that passed can now fail and one that failed can now pass. So can a page over 5 MiB, which no longer gets `ai/empty-content-to-bot`. Other sites get the same results. To keep the 0.5.6 results, set `version: '0.5.6'`; that also brings back the stalls described below.
+- robots.txt, sitemap.xml and the AI crawler probes can no longer stall the job or run it out of memory. `robots-txt-check` and the AI crawler checks give robots.txt 5 seconds to start answering and 10 seconds to arrive in full. `sitemap-presence` gives sitemap.xml 30 seconds and reads at most 50 MiB. Each AI crawler probe gives the page 15 seconds in all and reads at most 5 MiB; the headers still have to arrive within 5 seconds, as before. Before, `robots-txt-check` and `sitemap-presence` set no time limit of their own, and the AI checks stopped waiting only for the headers. robots.txt was already read only up to 500 KiB. The audited page itself and the other rules that fetch (`ttfb-pro`, `cors-policy`, `broken-internal-links`) fetch as before. None of these rules run against a local build (`localhost`), so a local build sees no change.
+- When robots.txt or sitemap.xml does not arrive in time, `robots-txt-check` or `sitemap-presence` reports a warning that says so, in place of its other findings. With `fail-on-warning`, that fails the check. A slow robots.txt that blocks Googlebot is no longer a critical finding, so without `fail-on-warning` such a page can now pass. If your robots.txt is generated per request (for example `app/robots.ts` on a preview deployment), check that it starts answering well within 5 seconds.
+- When robots.txt does not arrive in time, the AI crawler checks treat it as missing, as they do when the fetch fails. Findings that come from its rules are not reported: `ai/all-crawlers-blocked` for a site that disallows every AI bot, `ai/*-user-blocked` for a bot robots.txt disallows, and `ai/*-extended-disallowed`. A bot that robots.txt disallows and your server answers with 403, 429 or a 5xx now gets the critical `ai/*-silent-block` finding (GPTBot, ClaudeBot, PerplexityBot), which fails the check.
+- The near-empty content check (`ai/empty-content-to-bot`) skips a probe that runs out of time and a page cut at 5 MiB, so with `fail-on-warning` a page that failed only on it can now pass. A probe that runs out of time is not counted as a block, as before.
+- No change to results: a robots.txt with many `User-agent` lines no longer slows the job down. 0.5.6 took seconds to parse a file with a few hundred `User-agent` lines followed by rules up to the 500 KiB limit, and with thousands of `User-agent` lines tens of seconds and gigabytes of memory, which could crash the CLI; the action reports that as an error.
+- No change to results: the AI crawler checks measure the text of a probed page in linear time. Before, a page with many unclosed `<` or `<script` tags took time that grew with the square of its size (64 KiB of `<` took about 5 seconds).
 
 ### v1.2.4
 
@@ -161,7 +171,7 @@ Against `localhost`, LintPage skips the checks that only make sense for a public
     urls: 'https://staging.myapp.com'
     config: './seo/lintpage.config.json'
     fail-on-warning: 'true'
-    version: '0.5.6'
+    version: '0.5.7'
 ```
 
 ## How it works
